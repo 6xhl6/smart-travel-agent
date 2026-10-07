@@ -2,8 +2,10 @@ import axios from 'axios'
 import { useUserStore } from '@/store/user'
 import router from '@/router'
 
+// 根据不同部署环境配置 baseURL，开发环境在 .env.development 中指向本地后端，
+// 生产环境同域部署（nginx 反代 /api）时留空，走相对路径即可
 const request = axios.create({
-    baseURL: 'http://localhost:3500',
+    baseURL: import.meta.env.VITE_API_BASE_URL,
     timeout: 120000,
 })
 
@@ -23,12 +25,33 @@ request.interceptors.request.use(
     }
 )
 
-// 清空登录态并回到登录页；已在登录页时不再重复跳转
-const forceLogout = () => {
+// 令牌失效：清空登录态并引导用户重新登录
+// 页面并发发起多个请求时可能同时拿到 401，用一个标记保证弹窗只出现一次
+let isAuthExpired = false
+export const handleAuthExpired = () => {
+    if (isAuthExpired) return
+    isAuthExpired = true
+    // 令牌已经无效，先清掉本地登录态，避免界面继续停留在“已登录”的样子
     useUserStore().logout()
-    if (router.currentRoute.value.name !== 'LoginIndex') {
-        router.replace({ name: 'LoginIndex' })
-    }
+    showConfirmDialog({
+        title: '登录已过期',
+        message: '登录状态已过期，请重新登录',
+        confirmButtonText: '重新登录',
+        confirmButtonColor: '#1989fa',
+        theme: 'round-button',
+        // 令牌已经失效，此时没有“取消后继续用”的选项，只保留确认按钮
+        showCancelButton: false,
+        closeOnClickOverlay: false
+    })
+        .then(() => {
+            if (router.currentRoute.value.name !== 'LoginIndex') {
+                router.replace({ name: 'LoginIndex' })
+            }
+        })
+        .catch(() => { })
+        .finally(() => {
+            isAuthExpired = false
+        })
 }
 
 // 这些接口的 401 属于业务结果（账号密码错误），不触发登出跳转
@@ -49,10 +72,10 @@ request.interceptors.response.use(
             (error.code === 'ECONNABORTED' ? '请求超时，请稍后重试' : '') ||
             (response ? error.message : '网络异常，请检查网络连接')
 
-        // 令牌缺失或已过期：清空登录态并回到登录页
+        // 令牌缺失或已过期：提示用户并回到登录页
         const url = config?.url || ''
         if (response?.status === 401 && !NO_LOGOUT_URLS.some((item) => url.includes(item))) {
-            forceLogout()
+            handleAuthExpired()
         }
         return Promise.reject(error)
     }

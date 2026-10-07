@@ -1,32 +1,11 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onActivated } from 'vue'
 import { uploadAvatar, resolveAvatarUrl } from '@/services/auth'
 import { useUserStore } from '@/store/index'
 import router from '@/router'
 
-const APP_VERSION = 'v1.0.0'
 const MAX_AVATAR_SIZE = 2 * 1024 * 1024
 
-const onServiceClick = (name) => {
-    showToast(`${name}功能开发中`)
-}
-
-const onAboutUs = () => {
-    showDialog({
-        title: '关于我们',
-        message:
-            '智能旅游助手是一款面向旅行者的智能规划工具，融合大模型能力，为你提供目的地推荐、行程编排、预算规划、实时问答等一站式服务。',
-        confirmButtonText: '我知道了',
-    })
-}
-
-const onVersion = () => {
-    showDialog({
-        title: '版本信息',
-        message: `当前版本：${APP_VERSION}\n更新内容：优化聊天流式渲染体验，新增个人中心功能入口。`,
-        confirmButtonText: '我知道了',
-    })
-}
 // 登录态来自 user store（已持久化），后端通过 token 识别用户身份
 const userStore = useUserStore()
 const avatarUrl = ref(resolveAvatarUrl(userStore.user?.avatar))
@@ -34,6 +13,26 @@ const avatarUploader = ref(null)
 const isUploading = ref(false)
 // 前端简单判断登录态，用于页面展示。token 未登录时是空串，故用真值判断
 const isLogin = computed(() => !!userStore.token)
+
+// 收藏、历史记录都与用户绑定，未登录先引导登录
+const goWithLogin = (name, label) => {
+    if (!isLogin.value) {
+        showConfirmDialog({
+            title: '需要登录',
+            message: `${label}需要登录后使用，是否前往登录？`,
+            confirmButtonText: '去登录'
+        })
+            .then(() => router.push({ name: 'LoginIndex' }))
+            .catch(() => { })
+        return
+    }
+    router.push({ name })
+}
+
+const goFavorite = () => goWithLogin('FavoriteIndex', '查看收藏')
+const goHistory = () => goWithLogin('HistoryIndex', '查看历史记录')
+// 设置页含行程偏好，未登录也可进入，账号相关入口在页内自行判断
+const goSetting = () => router.push({ name: 'SettingIndex' })
 
 // 点击头像
 const onAvatarClick = () => {
@@ -92,23 +91,11 @@ const onFileChange = async (event) => {
     }
 }
 
-// 退出登录：二次确认后清空本地登录态，并回到登录页
-const onLogoutClick = () => {
-    showConfirmDialog({
-        title: '退出登录',
-        message: '确定要退出当前账号吗？',
-    })
-        .then(() => {
-            userStore.logout()
-            // 清掉页面上的头像，避免退出后仍展示上一次的图片
-            avatarUrl.value = ''
-            showToast('已退出登录')
-            router.replace({ name: 'LoginIndex' })
-        })
-        .catch(() => {
-            return
-        })
-}
+// 「我的」页被 keep-alive 缓存，退出登录或换账号后重新进入时要同步头像，
+// 否则会残留上一个账号的图片
+onActivated(() => {
+    avatarUrl.value = resolveAvatarUrl(userStore.user?.avatar)
+})
 </script>
 
 <template>
@@ -137,24 +124,9 @@ const onLogoutClick = () => {
         <div class="group-card">
             <div class="group-title">我的服务</div>
             <van-cell-group class="cell-group" inset>
-                <van-cell title="我的收藏" icon="star-o" is-link @click="onServiceClick('我的收藏')" />
-                <van-cell title="历史记录" icon="clock-o" is-link @click="onServiceClick('历史记录')" />
-                <van-cell title="设置" icon="setting-o" is-link @click="onServiceClick('设置')" />
-            </van-cell-group>
-        </div>
-
-        <div class="group-card">
-            <div class="group-title">关于</div>
-            <van-cell-group class="cell-group" inset>
-                <van-cell title="关于我们" icon="info-o" is-link @click="onAboutUs" />
-                <van-cell title="版本信息" icon="flag-o" is-link @click="onVersion" />
-            </van-cell-group>
-        </div>
-
-        <!-- 退出登录：仅登录后展示。结构与上方分组一致，靠红色区分危险操作 -->
-        <div v-if="isLogin" class="group-card">
-            <van-cell-group class="cell-group" inset>
-                <van-cell class="logout-cell" title="退出登录" icon="revoke" @click="onLogoutClick" />
+                <van-cell title="我的收藏" icon="star-o" is-link @click="goFavorite" />
+                <van-cell title="历史记录" icon="clock-o" is-link @click="goHistory" />
+                <van-cell title="设置" icon="setting-o" is-link @click="goSetting" />
             </van-cell-group>
         </div>
     </div>
@@ -269,19 +241,5 @@ const onLogoutClick = () => {
 .cell-group :deep(.van-icon) {
     color: #5297e0;
     font-size: 20px;
-}
-
-/* 退出登录：沿用其它 cell 的高度与内边距，仅将文字与图标改为警示红 */
-.cell-group .logout-cell :deep(.van-icon) {
-    color: #ee5c5c;
-}
-
-.cell-group .logout-cell :deep(.van-cell__title) {
-    color: #ee5c5c;
-    font-weight: 500;
-}
-
-.logout-cell:active {
-    background-color: #fff8f8;
 }
 </style>

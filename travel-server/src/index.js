@@ -1,6 +1,8 @@
 import express from 'express'
 import travelRouter from './routes/travel.js'
 import authRouter from './routes/auth.js'
+import favoritesRouter from './routes/favorites.js'
+import historiesRouter from './routes/histories.js'
 import cors from 'cors'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -22,6 +24,8 @@ app.get('/heartbeat', (req, res) => {
 //添加路由中间件
 app.use('/api/travel', travelRouter)
 app.use('/api/auth', authRouter)
+app.use('/api/favorites', favoritesRouter)
+app.use('/api/histories', historiesRouter)
 //未匹配到路由时也返回统一格式，避免前端收到 HTML 错误页
 app.use((req, res) => {
   sendFail(res, `接口不存在：${req.method} ${req.originalUrl}`, 404)

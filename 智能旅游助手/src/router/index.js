@@ -39,6 +39,21 @@ const routes = [
         name: 'DetailIndex',
         component: () => import('@/views/DetailIndex.vue'),
     },
+    {
+        path: '/favorite',
+        name: 'FavoriteIndex',
+        component: () => import('@/views/FavoriteIndex.vue'),
+    },
+    {
+        path: '/history',
+        name: 'HistoryIndex',
+        component: () => import('@/views/HistoryIndex.vue'),
+    },
+    {
+        path: '/setting',
+        name: 'SettingIndex',
+        component: () => import('@/views/SettingIndex.vue'),
+    },
 ]
 
 const router = createRouter({

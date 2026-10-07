@@ -2,9 +2,13 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getTravelPlan } from '@/services/recommend.js'
+import { addFavorite, getFavoriteDetail, getFavorites, removeFavorite } from '@/services/favorite'
+import { getHistoryDetail } from '@/services/history'
+import { useUserStore } from '@/store/index'
 
 const route = useRoute()
 const router = useRouter()
+const userStore = useUserStore()
 
 const form = {
     destination: route.query.destination || '',
@@ -43,7 +47,6 @@ const budgetUsage = computed(() => {
     return Math.min(100, Math.round((totalCost.value / form.budget) * 100))
 })
 const isOverBudget = computed(() => totalCost.value > form.budget)
-// 默认展开「住宿」，让「明细可下钻」一眼可见
 const activeBudgetPanels = ref(['accommodation'])
 
 // 预算明细：渲染信息全部来自 costBreakdown，每个类目形如 { amount, items: [{ day, title, desc, amount }] }
@@ -88,29 +91,129 @@ const onClickLeft = () => {
     router.back()
 }
 
+// 收藏状态：命中收藏记录时保存其 id，供取消收藏使用
+const favoriteId = ref('')
+const isFavorite = computed(() => !!favoriteId.value)
+const isFavoriteLoading = ref(false)
+
+// 按规划参数调用模型生成行程
+const fetchPlanFromModel = async () => {
+    const res = await getTravelPlan(form)
+    if (!res?.data || !Array.isArray(res.data.dailyPlan)) {
+        throw new Error('返回的行程数据格式不正确')
+    }
+    result.value = res.data
+}
+
+// 从收藏/历史进入：直接回显当时保存的行程快照，不再调用模型重新生成
+const loadSnapshotPlan = async (source, id) => {
+    const fromFavorite = source === 'favorite'
+    const res = fromFavorite ? await getFavoriteDetail(id) : await getHistoryDetail(id)
+    const record = res?.data
+    if (!record) {
+        throw new Error('记录不存在')
+    }
+    // 用快照回填规划参数，后续收藏/取消收藏仍可复用
+    form.destination = record.destination
+    form.budget = Number(record.budget)
+    form.days = Number(record.days)
+    // 从收藏进入时已知收藏 id，星标直接显示为已收藏
+    if (fromFavorite) {
+        favoriteId.value = record.id
+    }
+    if (record.plan && Array.isArray(record.plan.dailyPlan)) {
+        result.value = record.plan
+        return
+    }
+    // 兼容早期只存了规划参数、没有行程快照的记录
+    await fetchPlanFromModel()
+}
+
 const getPlan = async () => {
     isLoading.value = true
     isFailGotPlan.value = false
     errorMessage.value = ''
 
     try {
-        const res = await getTravelPlan(form)
-        if (!res?.data || !Array.isArray(res.data.dailyPlan)) {
-            throw new Error('返回的行程数据格式不正确')
+        if (route.query.favoriteId) {
+            await loadSnapshotPlan('favorite', route.query.favoriteId)
+        } else if (route.query.historyId) {
+            await loadSnapshotPlan('history', route.query.historyId)
+        } else {
+            await fetchPlanFromModel()
         }
-        result.value = res.data
-        // 打印result.value.content
-        console.log(result.value.content)
     } catch (error) {
         result.value = null
         isFailGotPlan.value = true
-        errorMessage.value = error.response?.data?.msg || '请稍后重新尝试'
+        errorMessage.value = error.response?.data?.msg || error.message || '请稍后重新尝试'
     } finally {
         isLoading.value = false
     }
 }
 
-onMounted(getPlan)
+// 判断收藏记录与当前规划参数是否指向同一份规划
+const isSamePlan = (item) =>
+    item.destination === form.destination
+    && Number(item.budget) === form.budget
+    && Number(item.days) === form.days
+
+// 未登录时不查询，避免触发无意义的 401
+const loadFavoriteState = async () => {
+    if (!userStore.token) return
+    try {
+        const res = await getFavorites()
+        const matched = (res?.data || []).find(isSamePlan)
+        favoriteId.value = matched?.id || ''
+    } catch (error) {
+        // 收藏状态只影响按钮展示，静默失败即可，不打断行程浏览
+        favoriteId.value = ''
+    }
+}
+
+const onToggleFavorite = async () => {
+    if (!userStore.token) {
+        showConfirmDialog({
+            title: '需要登录',
+            message: '收藏行程需要登录后使用，是否前往登录？',
+            confirmButtonText: '去登录'
+        })
+            .then(() => router.push({ name: 'LoginIndex' }))
+            .catch(() => { })
+        return
+    }
+    if (isFavoriteLoading.value) return
+
+    isFavoriteLoading.value = true
+    try {
+        if (isFavorite.value) {
+            await removeFavorite(favoriteId.value)
+            favoriteId.value = ''
+            showToast('已取消收藏')
+        } else {
+            const res = await addFavorite({
+                destination: form.destination,
+                budget: form.budget,
+                days: form.days,
+                // 连同当前展示的行程一起保存，之后从收藏进入可直接回显
+                plan: result.value
+            })
+            favoriteId.value = res?.data?.id || ''
+            showToast('收藏成功')
+        }
+    } catch (error) {
+        showToast(error.message || '操作失败，请稍后重试')
+    } finally {
+        isFavoriteLoading.value = false
+    }
+}
+
+onMounted(async () => {
+    await getPlan()
+    // 从收藏进入时接口已返回收藏 id，无需再查；历史进入或新生成时需要查一次收藏状态
+    if (!favoriteId.value) {
+        await loadFavoriteState()
+    }
+})
 </script>
 
 <template>
@@ -121,7 +224,16 @@ onMounted(getPlan)
             left-text="返回"
             left-arrow
             @click-left="onClickLeft"
-        />
+        >
+            <template v-if="result" #right>
+                <van-icon
+                    :name="isFavorite ? 'star' : 'star-o'"
+                    :color="isFavorite ? '#ffb300' : undefined"
+                    size="20"
+                    @click="onToggleFavorite"
+                />
+            </template>
+        </van-nav-bar>
 
         <main v-if="isLoading" class="loading-container">
             <van-loading size="28" type="spinner" vertical color="#1989fa">

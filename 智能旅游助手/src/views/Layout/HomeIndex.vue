@@ -1,41 +1,44 @@
 <script setup>
-import { onBeforeUnmount, onMounted, ref, computed } from 'vue'
+import { onActivated, onBeforeUnmount, onMounted, ref, computed } from 'vue'
 import router from '@/router/index.js'
-import { useUserStore } from '@/store/index'
+import { useUserStore, useSettingsStore } from '@/store/index'
+import { getCities } from '@/services/recommend'
 
 const userStore = useUserStore()
+const settingsStore = useSettingsStore()
+
+// 目的地候选项由后端下发，避免前端再维护一份城市清单
+const loadCities = async () => {
+    try {
+        const { data } = await getCities()
+        cityColumns.value = data || []
+    } catch (error) {
+        showToast(error.message || '目的地列表加载失败')
+    }
+}
 
 onMounted(() => {
-    console.log('首页挂载')
+    loadCities()
 })
+// 预算与天数取设置页里的行程偏好作为默认值
 const form = ref({
     destination: '',
-    budget: '',
-    days: 1
+    budget: settingsStore.defaultBudget || '',
+    days: settingsStore.defaultDays || 1
+})
+
+// 首页被 keep-alive 缓存，从设置页改完偏好回来时同步一次；
+// 已填过目的地的表单不动，避免覆盖用户正在编辑的内容
+onActivated(() => {
+    if (form.value.destination) return
+    form.value.budget = settingsStore.defaultBudget || ''
+    form.value.days = settingsStore.defaultDays || 1
 })
 
 const showCityPicker = ref(false)
-const cityColumns = ref([
-    {
-        text: '北京',
-        value: '北京'
-    },
-    {
-        text: '上海',
-        value: '上海'
-    },
-    {
-        text: '广州',
-        value: '广州'
-    },
-    {
-        text: '深圳',
-        value: '深圳'
-    }
-])
+const cityColumns = ref([])
 const onConfirmCity = (value) => {
     showCityPicker.value = false
-    console.log(value.selectedValues[0])
     form.value.destination = value.selectedValues[0]
 }
 // 需要登录的入口统一在这里拦截：对话与推荐接口都有 requireAuth，

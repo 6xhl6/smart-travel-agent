@@ -1,15 +1,10 @@
-import { JSONFilePreset } from 'lowdb/node'
 import jwt from 'jsonwebtoken'
 import bcrypt from 'bcryptjs'
-import fs from 'fs/promises'
-import path from 'path'
-import { fileURLToPath } from 'url'
 import { randomUUID } from 'crypto'
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
+import { getDB } from '../data/db.js'
 
 // 令牌有效期：过期后前端会收到 401，需要重新登录
-const TOKEN_TTL = '1h'
+const TOKEN_TTL = '7d'
 
 // 带业务错误码的异常，便于路由层区分处理
 export class AuthError extends Error {
@@ -21,27 +16,9 @@ export class AuthError extends Error {
 }
 
 class AuthService {
-    constructor() {
-        this.db = null
-        this.ready = this.initDB()
-    }
-    // 初始化 lowdb 数据库
-    async initDB() {
-        const dir = path.join(__dirname, '../data')
-        // 确保数据目录存在
-        await fs.mkdir(dir, { recursive: true })
-        const file = path.join(dir, 'db.json')
-        const db = await JSONFilePreset(file, { users: [] })
-        db.data.users ||= []
-        this.db = db
-        return db
-    }
-    // 等待数据库就绪
+    // 数据库实例由 data/db.js 统一提供，与其它 Service 共享同一份内存数据
     async ensureReady() {
-        if (!this.db) {
-            await this.ready
-        }
-        return this.db
+        return getDB()
     }
     // 注册用户
     async register(username, password) {
@@ -117,6 +94,60 @@ class AuthService {
         user.avatar = avatarUrl
         await db.write()
         return this.sanitize(user)
+    }
+    // 修改昵称
+    async updateNickname(userId, nickname) {
+        const name = String(nickname || '').trim()
+        if (!name) {
+            throw new Error('昵称不能为空')
+        }
+        if (name.length > 12) {
+            throw new Error('昵称长度不能超过 12 个字符')
+        }
+        const db = await this.ensureReady()
+        const user = db.data.users.find((u) => u.id === userId)
+        if (!user) {
+            throw new AuthError('用户不存在', 'USER_NOT_FOUND')
+        }
+        user.nickname = name
+        await db.write()
+        return this.sanitize(user)
+    }
+    // 修改密码：需校验原密码，新密码沿用注册时的强度要求
+    async updatePassword(userId, oldPassword, newPassword) {
+        const passwordReg = /^[a-zA-Z0-9]{6,15}$/
+        if (!oldPassword || !newPassword) {
+            throw new Error('原密码和新密码不能为空')
+        }
+        if (!passwordReg.test(newPassword)) {
+            throw new Error('新密码只能包含字母、数字，长度需在 6-15 位之间')
+        }
+        if (oldPassword === newPassword) {
+            throw new Error('新密码不能与原密码相同')
+        }
+        const db = await this.ensureReady()
+        const user = db.data.users.find((u) => u.id === userId)
+        if (!user) {
+            throw new AuthError('用户不存在', 'USER_NOT_FOUND')
+        }
+        const valid = await bcrypt.compare(oldPassword, user.passwordHash)
+        if (!valid) {
+            throw new Error('原密码不正确')
+        }
+        user.passwordHash = await bcrypt.hash(newPassword, 10)
+        await db.write()
+    }
+    // 注销账号
+    async removeAccount(userId) {
+        const db = await this.ensureReady()
+        const index = db.data.users.findIndex((u) => u.id === userId)
+        if (index === -1) {
+            throw new AuthError('用户不存在', 'USER_NOT_FOUND')
+        }
+        db.data.users.splice(index, 1)
+        db.data.favorites = db.data.favorites.filter((item) => item.userId !== userId)
+        db.data.histories = db.data.histories.filter((item) => item.userId !== userId)
+        await db.write()
     }
     // 去掉敏感字段
     sanitize(user) {

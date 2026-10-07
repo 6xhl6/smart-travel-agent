@@ -96,4 +96,35 @@ router.post('/avatar', requireAuth, (req, res) => {
     })
 })
 
+// 修改昵称
+router.patch('/profile', requireAuth, async (req, res) => {
+    try {
+        const user = await authService.updateNickname(req.userId, req.body?.nickname)
+        sendSuccess(res, user, '昵称修改成功')
+    } catch (error) {
+        sendFail(res, error.message || '昵称修改失败')
+    }
+})
+
+// 修改密码：成功后原令牌不再代表新的凭证状态，前端会清掉登录态要求重新登录
+router.patch('/password', requireAuth, async (req, res) => {
+    try {
+        const { oldPassword, newPassword } = req.body || {}
+        await authService.updatePassword(req.userId, oldPassword, newPassword)
+        sendSuccess(res, null, '密码修改成功，请重新登录')
+    } catch (error) {
+        sendFail(res, error.message || '密码修改失败')
+    }
+})
+
+// 注销账号：连同该用户的收藏与历史一并删除，不可恢复
+router.delete('/account', requireAuth, async (req, res) => {
+    try {
+        await authService.removeAccount(req.userId)
+        sendSuccess(res, null, '账号已注销')
+    } catch (error) {
+        sendFail(res, error.message || '注销失败')
+    }
+})
+
 export default router

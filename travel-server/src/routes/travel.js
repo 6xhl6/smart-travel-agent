@@ -1,11 +1,14 @@
 import express from 'express'
 import TravelService from '../services/TravelService.js'
+import HistoryService from '../services/HistoryService.js'
 import { streamResponse } from '../utils/streaming.js'
 import { sendSuccess, sendFail } from '../utils/response.js'
 import { requireAuth } from '../middlewares/auth.js'
+import { CITY_COLUMNS } from '../data/cities.js'
 
 const router = express.Router()
 const travelService = new TravelService()
+const historyService = new HistoryService()
 
 // 相同参数的推荐结果缓存 10 分钟：刷新页面、重复提交或他人请求同样参数时
 // 直接复用，避免反复调用大模型（一次生成要 30~70 秒）
@@ -37,6 +40,11 @@ const writePlanCache = (key, plan) => {
     planCache.set(key, { time: now, plan })
 }
 
+// 目的地候选项：静态数据，首页挂载时即请求，未登录也要能拉到，因此不加鉴权
+router.get('/cities', (req, res) => {
+    sendSuccess(res, CITY_COLUMNS, '获取目的地列表成功')
+})
+
 router.post('/recommend', requireAuth, async (req, res) => {
     try {
         const { destination, budget, days } = req.body
@@ -54,6 +62,12 @@ router.post('/recommend', requireAuth, async (req, res) => {
         // 只缓存结构完整的行程，参数不合法时返回的 Error 对象不写入缓存
         if (Array.isArray(response?.dailyPlan)) {
             writePlanCache(cacheKey, response)
+            // 生成成功后自动写入历史记录，用户可在「历史记录」里回看
+            // 写库失败不影响本次结果返回，因此单独兜底而不打断主流程
+            historyService.add(req.userId, { destination, budget, days, plan: response })
+                .catch((error) => {
+                    console.error('写入历史记录失败:', error.message)
+                })
         }
         sendSuccess(res, response, '获取推荐信息成功')
     } catch (error) {

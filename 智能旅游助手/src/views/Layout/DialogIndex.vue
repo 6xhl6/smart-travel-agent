@@ -1,8 +1,10 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, reactive, ref } from 'vue'
+import { storeToRefs } from 'pinia'
 import DOMPurify from 'dompurify'
 import MarkdownIt from 'markdown-it'
 import { streamTravelChat } from '@/services/recommend.js'
+import { useChatStore } from '@/store/chat'
 
 const markdown = new MarkdownIt({
     breaks: true,
@@ -48,10 +50,13 @@ const refreshRandomQuestions = () => {
     randomQuestions.value = pickRandom(quickQuestions)
 }
 
+// 消息存在 store 里，设置页才能清空；组件只负责输入与滚动
+const chatStore = useChatStore()
+const { messages, hasConversation } = storeToRefs(chatStore)
+
 const input = ref('')
 const isSending = ref(false)
 const messageList = ref(null)
-let messageId = 0
 let scrollFrame = null
 
 const getTime = () => new Intl.DateTimeFormat('zh-CN', {
@@ -60,16 +65,7 @@ const getTime = () => new Intl.DateTimeFormat('zh-CN', {
     hour12: false
 }).format(new Date())
 
-const createWelcomeMessage = () => ({
-    id: ++messageId,
-    role: 'assistant',
-    content: '你好，今天想去哪里？',
-    time: getTime()
-})
-
-const messages = ref([createWelcomeMessage()])
 const canSend = computed(() => input.value.trim().length > 0 && !isSending.value)
-const hasConversation = computed(() => messages.value.some((message) => message.role === 'user'))
 
 const renderMarkdown = (content) => DOMPurify.sanitize(markdown.render(content || ''))
 
@@ -84,25 +80,25 @@ const scrollToBottom = () => {
         })
     })
 }
-
+// 清空对话
 const clearConversation = () => {
     if (isSending.value) return
-    messages.value = [createWelcomeMessage()]
+    chatStore.clearConversation()
     input.value = ''
 }
-
+// 发送信息
 const sendMessage = async (question = input.value) => {
     const prompt = question.trim()
     if (!prompt || isSending.value) return
 
     const userMessage = {
-        id: ++messageId,
+        id: chatStore.nextId(),
         role: 'user',
         content: prompt,
         time: getTime()
     }
     const assistantMessage = reactive({
-        id: ++messageId,
+        id: chatStore.nextId(),
         role: 'assistant',
         content: '',
         time: getTime(),
@@ -110,7 +106,7 @@ const sendMessage = async (question = input.value) => {
         failed: false
     })
 
-    messages.value.push(userMessage, assistantMessage)
+    chatStore.addMessage(userMessage, assistantMessage)
     input.value = ''
     isSending.value = true
     scrollToBottom()
@@ -132,7 +128,10 @@ const sendMessage = async (question = input.value) => {
         if (!assistantMessage.content) {
             assistantMessage.content = '暂时没有获取到回答，请稍后重新尝试。'
         }
-        showToast(error.message || '发送失败，请稍后重试')
+        // 登录过期等已由拦截器弹过确认框的错误，不再重复提示
+        if (!error.silent) {
+            showToast(error.message || '发送失败，请稍后重试')
+        }
     } finally {
         assistantMessage.pending = false
         isSending.value = false
