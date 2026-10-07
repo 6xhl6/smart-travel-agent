@@ -14,3 +14,6 @@ src/data/db.json
 # 用户上传的静态资源（头像等）
 public/uploads/*
 !public/uploads/.gitkeep
+
+# 部署打包产物：服务器上传用的压缩包，不入库
+public.zip
